@@ -8,6 +8,7 @@ import copy
 import psutil
 import shutil
 import os
+import math
 from enum import Enum
 
 
@@ -25,6 +26,9 @@ class Data(Enum):
     POSITION = 1 # will collect the drone's current position [x, y, z] at each frame
     VELOCITY = 2 # will collect the drone's current velocity [vx, vy, vz] at each frame
     BGR = 3 # will collect BGR (not RGB) images from the scene at each frame
+class Camera(Enum):
+    DRONE = 1
+    GLOBAL = 2
 
 
 
@@ -41,21 +45,25 @@ display_windowed = True # True will launch AirSim as a window (recommended) rath
 display_animals = False # True will have animals running around map
 self_stabilize = True # True will run custom script to stabilize drone after commands, otherwise can spin out of control -- 
 mode_control = Modes.DURATION # how to move drone between points, changes stability (DURATION recommended)
-drone_speed = 2 # average linear speed drone will move -- in m/s (recommend 2 for stability)
+drone_speed = 1 # average linear speed drone will move -- in m/s (recommend 2 for stability)
 start_position = [0, 0, -4] # will teleport drone to this position before starting trajectory
 positions_list = [ # list of positions for drone to sequentially visit, [x, y, z] in drone coordinates 
-    [4, 4, -4],
-    [4, 4, -8],
-    [-4, -4, -4],
+    [0, 2, -4],
+    [2, 2, -4],
+    [2, 2, -6],
+    [0, 0, -4],
 ] # drone coordinates: +x is forward facing from initial drone position, +y is right, +z is downwards
 data_types = [ # what type of data to collect at each frame
     Data.POSITION,
     Data.VELOCITY,
     Data.BGR,
 ]
-frame_rate =  1 # frames per second to capture data at during trajectory movement
-clock_speed = 1 # scalar value of how quickly AirSim runs on Unreal Engine on the backend -- values higher than 8 are unstable 
-collection_time = 10 # number of seconds to collect data for 
+camera = Camera.GLOBAL # either FPV drone perspective of global, if global set below params
+camera_global_position = [-4, -4, -1] # x, y, z drone coords
+camera_global_orientation = [20, 0, 20] # pitch, roll, yaw in degrees
+frame_rate =  1 # frames per second to capture data at during trajectory movement higher than 8 are unstable 
+collection_time = 12 # number of seconds to collect data for 
+smile_for_the_camera = 1 # number of seconds to freeze screen at each frame for debugging/demo purposes -- you can set this to zero for actual data collection
 # save above parameters to write to file for future reference
 all_local_vars = locals()
 user_local_vars = {k:v for k, v in all_local_vars.items() if (not k.startswith('__') and k not in initial_locals and k not in ['initial_locals','all_local_vars'])}
@@ -84,8 +92,6 @@ flags_list = []
 if display_windowed:
     flags_list.append('windowed') # without this flag will be full screen
 flags_str = '-' + ' -'.join(flags_list)
-
-# LUCA -- you will have to edit this settings json file appropriately to launch in computer vision I believe? Either make a new .json file and set the path accordingly above or edit the json dictionary file directly in this py script in "update with additional settings"
 # json settings to use for AirSim
 # initialize based settings json file to pass in terminal
 settings = json.load(open(base_settings_path, 'r'))
@@ -96,7 +102,7 @@ json.dump(settings, open(temp_settings_path, 'w'), indent=2)
 # make command to launch airsim
 terminal_command = f'sh {release_path} {flags_str} -settings=\"{temp_settings_path}\"'
 print('press any key to launch AirSim with command:', terminal_command)
-print('After, then press any key when AirSim has fully launched -- when you can see it rendered')
+print('After AirSim has properly launched and rendered, then press any key again to continue...')
 ini = input()
 
 # launch AirSim
@@ -121,8 +127,6 @@ if not display_animals:
     animals = [name for name in objects if 'Deer' in name or 'Raccoon' in name or 'Animal' in name]
     _ = [client.simDestroyObject(name) for name in animals] # PETA has joined the chat
     
-    
-    
 
 ## ******** EXECUTE DRONE MOVEMENT AND DATA COLLECTION ******** 
 
@@ -133,6 +137,7 @@ def stabilize_drone():
     client.rotateByYawRateAsync(0, 0.001).join()
     client.moveByVelocityAsync(0, 0, 0, 0.001).join()
 # the below "move_by" methods are 3 ways of telling AirSim to move the drone
+# you will only need these if you need to later manually move it
 # each way varies in stability -- 
 # move_by_position can lead to timeout errors
 # move_by_duration is the most stable however less accurate
@@ -141,10 +146,10 @@ def move_by_position(x, y, z):
     if self_stabilize: stabilize_drone()
 def move_by_duration(x, y, z):
     if self_stabilize: stabilize_drone()
-def move_by_teleport(x, y, z, yaw=0):
+def move_by_teleport(x, y, z, pitch=0, roll=0, yaw=0):
     pose = airsim.Pose(
         airsim.Vector3r(x, y, z), 
-        airsim.to_quaternion(0, 0, yaw),
+        airsim.to_quaternion(pitch, roll, yaw),
     )
     client.simSetVehiclePose(pose, ignore_collision=True)
     if self_stabilize: stabilize_drone()
@@ -167,23 +172,38 @@ n_frames = collection_time * frame_rate
 delta_t = collection_time / n_frames
 frames = [] # will contain all data at each frame
 for t in range(n_frames):
-    print('frame', t)
-    # freeze client and capture data (freeze to ensure all data is synchronized)
+    print('frame', t+1)
     client.simPause(True)
+    #kinematics = client.getMultirotorState().kinematics_estimated
+    kinematics = client.simGetGroundTruthKinematics()
+    drone_position = kinematics.position
+    drone_velocity = kinematics.linear_velocity
+    drone_orientation = kinematics.orientation
+    # set camera
+    if camera == Camera.GLOBAL:
+        drone_orientation = np.array(airsim.to_eularian_angles(drone_orientation))
+        global_orientation = np.array([math.radians(theta) for theta in camera_global_orientation])
+        pitch, roll, yaw = global_orientation - drone_orientation
+        camera_orientation = airsim.to_quaternion(pitch, roll, yaw)
+        camera_position = airsim.Vector3r(*camera_global_position) - drone_position
+        camera_pose = airsim.Pose(camera_position, camera_orientation)
+        client.simSetCameraPose("0", camera_pose) # by default this is forward facing camera on drone, we are overwriting it
+    if smile_for_the_camera > 0:
+        dummy_response = client.simGetImages([airsim.ImageRequest('0', 0, False, False)])[0]
+        #time.sleep(0.1)
+        time.sleep(smile_for_the_camera)
+    # freeze client and capture data (freeze to ensure all data is synchronized)
     # capture each type of data and save to map for this frame
     data_map = {}
     for data_type in data_types:
         if data_type == Data.POSITION:
-            position = client.getMultirotorState().kinematics_estimated.position
-            x, y, z = position.x_val, position.y_val, position.z_val
+            x, y, z = drone_position.x_val, drone_position.y_val, drone_position.z_val
             data = [x, y, z]
         if data_type == Data.VELOCITY:
-            velocity = client.getMultirotorState().kinematics_estimated.linear_velocity
-            vx, vy, vz = velocity.x_val, velocity.y_val, velocity.z_val
+            vx, vy, vz = drone_velocity.x_val, drone_velocity.y_val, drone_velocity.z_val
             data = [vx, vy, vz]
-        # LUCA -- you will have to edit this to account for the right perspective
         if data_type == Data.BGR:
-            # from airsim ...
+            # from airsim defaults are ...
             # camera_view values:
                 # 'front_center' or '0'
                 # 'front_right' or '1'
@@ -201,7 +221,7 @@ for t in range(n_frames):
                 # Infrared = 7,
                 # OpticalFlow = 8,
                 # OpticalFlowVis = 9
-            camera_view = '0' # drone front facing
+            camera_view = '0' # drone front facing or we will overwrite this if GLOBAL
             image_type = 0 # Scene == BGR
             # this controls dimensions of output img -- either (height, width) for 1-channel or (height, width, channels)
             n_channels = 1
