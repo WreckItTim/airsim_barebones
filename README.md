@@ -1,3 +1,6 @@
+
+# AirSim Image and Data Generation
+
 see RUN section to run a demo to ensure the environment is set up properly
 to set up, see INSTALLATION section below
 for more advance use when editing the .py file see DOCS
@@ -36,5 +39,66 @@ change the appropriate release paths if needed in .py files to desired AirSim ma
 ## DOCS:
 
 
-	
 
+
+# DynamicSound Audio Generation
+
+## INSTALLATION
+
+1) create a separate environment
+
+    (Windows)
+    ```bash
+    python -m venv venv
+    ```
+    (Ubuntu)
+    ```bash
+    python3 -m venv venv
+    ```
+
+2) activate the environment
+
+    (Windows)
+    ```bash
+    venv\Scripts\activate.bat
+    ```
+    (Ubuntu)
+    ```bash
+    source venv/bin/activate
+    ```
+
+3) install *dynamic_sound* library
+
+    (Windows)
+    ```bash
+    (venv)pip install -e .\dynamic_sound
+    ```
+    (Ubuntu)
+    ```bash
+    (venv)pip3 install -e .\dynamic_sound
+    ```
+
+4) optional only for jupyter results visualization
+
+    (Windows)
+    ```bash
+    (venv)pip install jupyter matplotlib ipympl pyroomacoustics
+    ```
+    (Ubuntu)
+    ```bash
+    (venv)pip3 install jupyter matplotlib ipympl
+    ```
+
+## EXECUTION
+```bash
+(venv)python sound_generator.py
+```
+
+## VISUALIZATION
+```bash
+(venv)jupyter lab
+```
+
+open the file "airsim_simulation.ipynb"
+
+execute each cell in sequence
