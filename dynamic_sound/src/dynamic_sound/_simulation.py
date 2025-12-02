@@ -4,6 +4,7 @@ import numpy as np
 import wave
 from collections import deque
 from scipy.signal import firwin2, lfilter
+import struct
 
 from ._environment import Air
 from .acoustics import attenuations
@@ -62,7 +63,7 @@ class Simulation:
         return None, None
 
     def run(self):
-        c = sound_speed(temperature=self.air.temperature, reference_temperature=REFERENCE_TEMPERATURE)
+        c = sound_speed(temperature=self.air.temperature, reference_temperature=20.0)
 
         for microphone_path, microphone in self._microphones:
             dst_path = os.path.dirname(microphone.file_path)
@@ -75,13 +76,13 @@ class Simulation:
                 wave_file.setframerate(microphone.sample_rate)
 
                 # air absorption filter
-                filter_len = 11
-                frequencies = np.linspace(0, microphone.sample_rate/2, num=20)  # freq bands resolution
+                filter_len = 513
+                frequencies = np.linspace(0, microphone.sample_rate/2, num=512)
                 air_absorption_coefficients = attenuation_coefficients(
                     frequency=frequencies,
-                    temperature=20 + 273.15,
-                    relative_humidity=50,
-                    pressure=1 * 101.325
+                    temperature=self.air.temperature + 273.15,
+                    relative_humidity=self.air.relative_humidity,
+                    pressure=self.air.pressure * 101.325
                 )
 
                 out_buffer = [deque(np.zeros(filter_len), maxlen=filter_len) for _ in range(microphone.num_channels)]
@@ -108,13 +109,5 @@ class Simulation:
                                 out_buffer[channel_index].appendleft(source.get_sample(time_emission) * attenuation_geom)
                                 out_samples[sample_index, channel_index] += air_fir_coefficients.dot(out_buffer[channel_index])
                 
-                wave_file.writeframes((out_samples * (2**31 - 1)).astype(np.int32).tobytes())
-
-
-
-
-
-
-
-
-
+                interleaved = (np.clip(out_samples, -1.0, 1.0) * np.iinfo(np.int32).max).astype(np.int32).reshape(-1)
+                wave_file.writeframes(struct.pack("<" + "i" * len(interleaved), *interleaved)) # int32 (little-endian)
